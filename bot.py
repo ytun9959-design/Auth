@@ -6,6 +6,7 @@ import telebot
 from telebot import types
 import threading
 from flask import Flask
+from datetime import datetime
 
 # ================= [ FLASK WEB SERVER FOR RENDER (NO SLEEP) ] =================
 app = Flask('')
@@ -21,6 +22,7 @@ def run_web_server():
 # ================= [ CONFIGURATION ] =================
 BOT_TOKEN = "8843922979:AAFZLgAekpj-QMblNTTVPWdHNs4kbPPoMDA"
 ADMIN_ID = 5617375002
+DEFAULT_LIMIT = 5  # ရီဆဲလာဟောင်းများအတွက် အော်တိုသတ်မှတ်ပေးမည့် Limit
 
 GITHUB_TOKEN = os.getenv("GH_TOKEN") 
 REPO_OWNER = "ytun9959-design" 
@@ -63,11 +65,28 @@ def pull_data_from_github():
             for line in file_content_keys.split("\n"):
                 if " | " in line:
                     parts = [p.strip() for p in line.split("|")]
-                    if len(parts) == 4:
+                    created_date = datetime.now().strftime("%Y-%m-%d")
+                    
+                    if len(parts) == 6:
+                        try: owner_id = int(parts[4])
+                        except: owner_id = ADMIN_ID
+                        created_date = parts[5]
                         cursor.execute("""
-                            INSERT OR IGNORE INTO auth_keys (target_id, key_string, unit_val, duration_type, added_by) 
-                            VALUES (?, ?, ?, ?, ?)
-                        """, (parts[0], parts[1], parts[2], parts[3], ADMIN_ID))
+                            INSERT OR IGNORE INTO auth_keys (target_id, key_string, unit_val, duration_type, added_by, created_at) 
+                            VALUES (?, ?, ?, ?, ?, ?)
+                        """, (parts[0], parts[1], parts[2], parts[3], owner_id, created_date))
+                    elif len(parts) == 5:
+                        try: owner_id = int(parts[4])
+                        except: owner_id = ADMIN_ID
+                        cursor.execute("""
+                            INSERT OR IGNORE INTO auth_keys (target_id, key_string, unit_val, duration_type, added_by, created_at) 
+                            VALUES (?, ?, ?, ?, ?, ?)
+                        """, (parts[0], parts[1], parts[2], parts[3], owner_id, created_date))
+                    elif len(parts) == 4:
+                        cursor.execute("""
+                            INSERT OR IGNORE INTO auth_keys (target_id, key_string, unit_val, duration_type, added_by, created_at) 
+                            VALUES (?, ?, ?, ?, ?, ?)
+                        """, (parts[0], parts[1], parts[2], parts[3], ADMIN_ID, created_date))
             conn.commit()
             conn.close()
             print("[+] Success: Keys data restored.")
@@ -93,7 +112,6 @@ def pull_data_from_github():
             conn = sqlite3.connect(DB_FILE)
             cursor = conn.cursor()
             
-            # ဒေတာဟောင်း ရှင်းထုတ်သည်
             cursor.execute("DELETE FROM users WHERE tg_id != ?", (ADMIN_ID,))
             
             lines = file_content_resellers.split("\n")
@@ -103,15 +121,22 @@ def pull_data_from_github():
                 
                 if "|" in line:
                     parts = [p.strip() for p in line.split("|") if p.strip()]
-                    if len(parts) == 2:
+                    if len(parts) == 3:
                         clean_id = parts[0].replace(" ", "")
                         if clean_id.isdigit():
                             target_tg_id = int(clean_id)
                             user_role = 'admin' if target_tg_id == ADMIN_ID else 'reseller'
-                            cursor.execute("INSERT OR REPLACE INTO users (tg_id, username, role) VALUES (?, ?, ?)", (target_tg_id, parts[1], user_role))
+                            try: r_limit = int(parts[2])
+                            except: r_limit = DEFAULT_LIMIT
+                            cursor.execute("INSERT OR REPLACE INTO users (tg_id, username, role, daily_limit) VALUES (?, ?, ?, ?)", (target_tg_id, parts[1], user_role, r_limit))
+                    elif len(parts) == 2:
+                        clean_id = parts[0].replace(" ", "")
+                        if clean_id.isdigit():
+                            target_tg_id = int(clean_id)
+                            user_role = 'admin' if target_tg_id == ADMIN_ID else 'reseller'
+                            cursor.execute("INSERT OR REPLACE INTO users (tg_id, username, role, daily_limit) VALUES (?, ?, ?, ?)", (target_tg_id, parts[1], user_role, DEFAULT_LIMIT))
             
-            # Main Admin ကို Database ထဲတွင် အမြဲရှိနေအောင် သေချာ ထည့်သွင်းထားမည်
-            cursor.execute("INSERT OR REPLACE INTO users (tg_id, username, role) VALUES (?, ?, 'admin')", (ADMIN_ID, 'Main_Admin'))
+            cursor.execute("INSERT OR REPLACE INTO users (tg_id, username, role, daily_limit) VALUES (?, ?, 'admin', 999999)", (ADMIN_ID, 'Main_Admin'))
             conn.commit()
             conn.close()
             print("[+] Success: Resellers database updated smoothly.")
@@ -126,25 +151,25 @@ def init_db():
     cursor.execute('''CREATE TABLE IF NOT EXISTS auth_keys (
         id INTEGER PRIMARY KEY AUTOINCREMENT, 
         target_id TEXT,
-        key_string TEXT UNIQUE, 
+        key_string TEXT, 
         unit_val TEXT, 
         duration_type TEXT, 
-        added_by INTEGER
+        added_by INTEGER,
+        created_at TEXT
     )''')
     cursor.execute('''CREATE TABLE IF NOT EXISTS users (
         tg_id INTEGER PRIMARY KEY, 
         username TEXT, 
-        role TEXT
+        role TEXT,
+        daily_limit INTEGER DEFAULT 5
     )''')
-    cursor.execute("INSERT OR IGNORE INTO users (tg_id, username, role) VALUES (?, ?, ?)", (ADMIN_ID, 'Main_Admin', 'admin'))
+    cursor.execute("INSERT OR IGNORE INTO users (tg_id, username, role, daily_limit) VALUES (?, ?, ?, ?)", (ADMIN_ID, 'Main_Admin', 'admin', 999999))
     conn.commit()
 
     cursor.execute("PRAGMA table_info(auth_keys)")
     columns = [col[1] for col in cursor.fetchall()]
     if 'target_id' not in columns:
-        try:
-            cursor.execute("ALTER TABLE auth_keys ADD COLUMN target_id TEXT")
-            conn.commit()
+        try: cursor.execute("ALTER TABLE auth_keys ADD COLUMN target_id TEXT"); conn.commit()
         except: pass
     if 'unit_val' not in columns:
         try:
@@ -152,6 +177,16 @@ def init_db():
             cursor.execute("ALTER TABLE auth_keys ADD COLUMN duration_type TEXT")
             conn.commit()
         except: pass
+    if 'created_at' not in columns:
+        try: cursor.execute("ALTER TABLE auth_keys ADD COLUMN created_at TEXT"); conn.commit()
+        except: pass
+
+    cursor.execute("PRAGMA table_info(users)")
+    u_columns = [col[1] for col in cursor.fetchall()]
+    if 'daily_limit' not in u_columns:
+        try: cursor.execute("ALTER TABLE users ADD COLUMN daily_limit INTEGER DEFAULT 5"); conn.commit()
+        except: pass
+        
     conn.close()
 
 init_db()
@@ -162,7 +197,7 @@ def sync_db_to_github():
     try:
         conn = sqlite3.connect(DB_FILE)
         cursor = conn.cursor()
-        cursor.execute("SELECT target_id, key_string, unit_val, duration_type FROM auth_keys")
+        cursor.execute("SELECT target_id, key_string, unit_val, duration_type, added_by, created_at FROM auth_keys")
         rows = cursor.fetchall()
         conn.close()
         
@@ -172,7 +207,9 @@ def sync_db_to_github():
             kstr = row[1] if row[1] else "NoKey"
             uval = row[2] if row[2] else "0"
             dtype = row[3] if row[3] else "d"
-            content_lines.append(f"{tid} | {kstr} | {uval} | {dtype}")
+            owner = row[4] if row[4] else str(ADMIN_ID)
+            cdate = row[5] if row[5] else datetime.now().strftime("%Y-%m-%d")
+            content_lines.append(f"{tid} | {kstr} | {uval} | {dtype} | {owner} | {cdate}")
             
         file_content = "\n".join(content_lines)
         url = f"https://api.github.com/repos/{REPO_OWNER}/{REPO_NAME}/contents/{FILE_PATH}"
@@ -181,7 +218,7 @@ def sync_db_to_github():
         res = requests.get(url, headers=headers)
         sha = res.json().get('sha') if res.status_code == 200 else None
         payload = {
-            "message": "Bot Auto Sync Keys",
+            "message": "Bot Auto Sync Keys with Date Limits",
             "content": base64.b64encode(file_content.encode('utf-8')).decode('utf-8')
         }
         if sha: payload["sha"] = sha
@@ -195,13 +232,13 @@ def sync_resellers_to_github():
     try:
         conn = sqlite3.connect(DB_FILE)
         cursor = conn.cursor()
-        cursor.execute("SELECT tg_id, username FROM users")
+        cursor.execute("SELECT tg_id, username, daily_limit FROM users")
         rows = cursor.fetchall()
         conn.close()
         
         content_lines = []
         for row in rows:
-            content_lines.append(f"{row[0]} | {row[1]}")
+            content_lines.append(f"{row[0]} | {row[1]} | {row[2]}")
             
         file_content = "\n".join(content_lines)
         url = f"https://api.github.com/repos/{REPO_OWNER}/{REPO_NAME}/contents/{RESELLER_FILE_PATH}"
@@ -210,7 +247,7 @@ def sync_resellers_to_github():
         res = requests.get(url, headers=headers)
         sha = res.json().get('sha') if res.status_code == 200 else None
         payload = {
-            "message": "Bot Auto Sync Resellers List",
+            "message": "Bot Auto Sync Resellers List with custom limits",
             "content": base64.b64encode(file_content.encode('utf-8')).decode('utf-8')
         }
         if sha: payload["sha"] = sha
@@ -250,6 +287,24 @@ def get_user_name(user_id):
     conn.close()
     return res[0] if res else f"Unknown ({user_id})"
 
+def get_reseller_daily_limit(user_id):
+    if user_id == ADMIN_ID: return 999999
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute("SELECT daily_limit FROM users WHERE tg_id = ?", (user_id,))
+    res = cursor.fetchone()
+    conn.close()
+    return res[0] if res else DEFAULT_LIMIT
+
+def get_today_added_count(user_id):
+    today_str = datetime.now().strftime("%Y-%m-%d")
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute("SELECT COUNT(*) FROM auth_keys WHERE added_by = ? AND created_at = ?", (user_id, today_str))
+    count = cursor.fetchone()[0]
+    conn.close()
+    return count
+
 # --- Custom Menu Keyboard ---
 def get_main_keyboard(user_id):
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
@@ -285,7 +340,7 @@ def process_reseller_id(message):
     admin_id = message.from_user.id
     try:
         reseller_id = int(message.text.strip())
-        reseller_temp_data[admin_id] = reseller_id
+        reseller_temp_data[admin_id] = {'id': reseller_id}
         user_states[admin_id] = 'waiting_for_reseller_name'
         bot.reply_to(message, f"✍️ ID `{reseller_id}` အတွက် သတ်မှတ်မည့် **Reseller နာမည်** ကို ပို့ပေးပါ-", parse_mode="Markdown")
     except: 
@@ -295,30 +350,47 @@ def process_reseller_id(message):
 def process_reseller_name(message):
     admin_id = message.from_user.id
     reseller_name = message.text.strip()
-    reseller_id = reseller_temp_data.get(admin_id)
-
-    if not reseller_id:
-        bot.reply_to(message, "❌ အချိန်လွန်သွားပါပြီ။ လူသစ်ပြန်ဆောက်ပေးပါ။")
+    
+    if admin_id not in reseller_temp_data:
+        bot.reply_to(message, "❌ အချိန်လွန်သွားပါပြီ။ အစမှ ပြန်ဆောက်ပေးပါ။")
         user_states[admin_id] = None
         return
 
+    reseller_temp_data[admin_id]['name'] = reseller_name
+    user_states[admin_id] = 'waiting_for_reseller_limit'
+    bot.reply_to(message, f"📊 နာမည် `_{reseller_name}_` အတွက် တစ်ရက်လျှင် ထည့်သွင်းခွင့်ပြုမည့် **Key အရေအတွက် အကန့်အသတ် (Limit)** ကို ဂဏန်းသီးသန့် ပို့ပေးပါ-", parse_mode="Markdown")
+
+@bot.message_handler(func=lambda msg: user_states.get(msg.from_user.id) == 'waiting_for_reseller_limit' and msg.text not in MENU_BUTTONS)
+def process_reseller_limit(message):
+    admin_id = message.from_user.id
+    
+    if admin_id not in reseller_temp_data or 'id' not in reseller_temp_data[admin_id]:
+        bot.reply_to(message, "❌ အချက်အလက် မှားယွင်းသွားပါပြီ။ လူသစ်ပြန်ဆောက်ပေးပါ။")
+        user_states[admin_id] = None
+        return
+        
     try:
+        r_limit = int(message.text.strip())
+        reseller_id = reseller_temp_data[admin_id]['id']
+        reseller_name = reseller_temp_data[admin_id]['name']
+        
         conn = sqlite3.connect(DB_FILE)
         cursor = conn.cursor()
-        cursor.execute("INSERT OR REPLACE INTO users (tg_id, username, role) VALUES (?, ?, 'reseller')", (reseller_id, reseller_name))
+        cursor.execute("INSERT OR REPLACE INTO users (tg_id, username, role, daily_limit) VALUES (?, ?, 'reseller', ?)", (reseller_id, reseller_name, r_limit))
         conn.commit()
         conn.close()
         
-        bot.reply_to(message, f"✅ **အောင်မြင်ပါသည်!**\n👤 နာမည်: `{reseller_name}`\n🆔 ID: `{reseller_id}` အား Reseller ခန့်အပ်ပြီးပါပြီ။ Cloud သို့ အော်တိုသိမ်းဆည်းနေပါသည်...", parse_mode="Markdown")
+        bot.reply_to(message, f"✅ **အောင်မြင်ပါသည်!**\n👤 နာမည်: `{reseller_name}`\n🆔 ID: `{reseller_id}`\n📊 Daily Limit: `{r_limit} ခု` အား သတ်မှတ်ပြီးပါပြီ။ Cloud သို့ သိမ်းဆည်းနေပါသည်...", parse_mode="Markdown")
         sync_resellers_to_github()
         
-    except Exception as e:
-        bot.reply_to(message, f"❌ သိမ်းဆည်းရာတွင် အမှားအယွင်းရှိခဲ့သည်- {str(e)}")
-    
+    except:
+        bot.reply_to(message, "❌ မှားယွင်းနေပါသည်။ Key အရေအတွက် ကန့်သတ်ချက်ကို ဂဏန်းသီးသန့်သာ ပို့ပေးပါ။")
+        return
+        
     user_states[admin_id] = None
     if admin_id in reseller_temp_data: del reseller_temp_data[admin_id]
 
-# 2. Reseller List (Special Character Error များကို ကျော်လွှားရန် HTML စနစ်သို့ ပြောင်းလဲထားသည်)
+# 2. Reseller List
 @bot.message_handler(func=lambda msg: msg.text == "📊 Reseller List")
 def admin_view_resellers(message):
     user_id = message.from_user.id
@@ -332,20 +404,24 @@ def admin_view_resellers(message):
     try:
         conn = sqlite3.connect(DB_FILE)
         cursor = conn.cursor()
-        cursor.execute("SELECT tg_id, username, role FROM users")
+        cursor.execute("SELECT tg_id, username, role, daily_limit FROM users")
         rows = cursor.fetchall()
         conn.close()
         
         if not rows: 
             return bot.reply_to(message, "📭 Database ထဲတွင် အသုံးပြုသူစာရင်း လုံးဝမရှိသေးပါ။")
         
-        # HTML formatting သုံးပြီး Telegram စာသားပုံစံ ပြင်ဆင်သည်
         res = f"👥 <b>အသုံးပြုသူ စာရင်းစုစုပေါင်း:</b> {len(rows)} ဦး\n\n"
         for r in rows:
-            role_tag = "👑 Admin" if r[2] == 'admin' else "👤 Reseller"
-            # နာမည်ထဲတွင် 特殊符号များ ပါခဲ့ပါက ကာကွယ်ရန် HTML escape အနည်းငယ် သုံးသည်
+            if r[2] == 'admin':
+                role_tag = "👑 Admin"
+                limit_str = "Unlimited"
+            else:
+                role_tag = "👤 Reseller"
+                limit_str = f"{r[3]} ခု/ရက်"
+                
             clean_name = str(r[1]).replace("<", "&lt;").replace(">", "&gt;")
-            res += f"• <b>{clean_name}</b> (ID: {r[0]}) - [{role_tag}]\n"
+            res += f"• <b>{clean_name}</b> (ID: {r[0]}) - [{role_tag}] (Limit: <code>{limit_str}</code>)\n"
             
         bot.reply_to(message, res, parse_mode="HTML")
     except Exception as e:
@@ -408,51 +484,77 @@ def admin_view_all_keys(message):
         res += f"🆔 `{r[0]}` | 🔑 `{r[1]}` | {r[2]} | {r[3]} (By: *{owner_name}*)\n"
     bot.reply_to(message, res, parse_mode="Markdown")
 
-# 5. Add Key
-
-# ==========================================
-# 5. Add Key (ပုံစံမှန်လျှင် ဘယ်လိုဖြစ်ဖြစ် ဒေတာ ဇွတ်ထည့်မည့်စနစ်)
-# ==========================================
+# 5. Add Key (🌟 Fix ချက်: ID တူရင်ပယ်ချပြီး ID မတူရင် Key တူတူမတူတူ ဇွတ်ထည့်ပေးမည့် စနစ် + Custom Daily Limit)
 @bot.message_handler(func=lambda msg: msg.text == "➕ Add Key" and is_reseller(msg.from_user.id))
 def cmd_addkey(message):
-    user_states[message.from_user.id] = 'waiting_for_key'
+    user_id = message.from_user.id
+    pull_data_from_github()
+    
+    if not is_admin(user_id):
+        user_limit = get_reseller_daily_limit(user_id)
+        current_count = get_today_added_count(user_id)
+        if current_count >= user_limit:
+            bot.reply_to(message, f"❌ **တားဆီးထားပါသည်!**\n\nသင်သည် ယနေ့အတွက် သတ်မှတ်ထားသော သင့်ကိုယ်ပိုင် Key အကန့်အသတ် **{user_limit} ခု** ပြည့်သွားပါပြီ။ မနက်ဖြန်မှသာ ထပ်မံထည့်သွင်းနိုင်ပါမည်။", parse_mode="Markdown")
+            return
+
+    user_states[user_id] = 'waiting_for_key'
     msg_text = ("✍️ ကျေးဇူးပြု၍ Key အချက်အလက်ကို အောက်ပါပုံစံအတိုင်း တိကျစွာ ပို့ပေးပါ-\n\n`ID | Key | Unit | Duration`\n\n💡 **ပုံစံနမူနာ:**\n• `F4AFA83F4F1577DE | XYZ-KEY-999 | 3 | d`")
     bot.reply_to(message, msg_text, parse_mode="Markdown")
 
 @bot.message_handler(func=lambda msg: user_states.get(msg.from_user.id) == 'waiting_for_key' and msg.text not in MENU_BUTTONS)
 def process_key_data(message):
     user_id = message.from_user.id
-    parts = [p.strip() for p in message.text.split("|")]
     
-    # ၁။ ပုံစံ (Format) မှန်မမှန်ကိုပဲ အဓိက စစ်ဆေးပါသည်
+    if not is_admin(user_id):
+        user_limit = get_reseller_daily_limit(user_id)
+        if get_today_added_count(user_id) >= user_limit:
+            user_states[user_id] = None
+            return bot.reply_to(message, f"❌ သင်သည် ယနေ့အတွက် သတ်မှတ်ထားသော Key အကန့်အသတ် {user_limit} ခု ပြည့်သွားပါပြီ။")
+
+    parts = [p.strip() for p in message.text.split("|")]
     if len(parts) != 4: 
         return bot.reply_to(message, "❌ ပုံစံမမှန်ပါ။ `ID | Key | Unit | Duration` အတိုင်း ပြန်လည်ပေးပို့ပါ။")
     
+    target_id = parts[0]
+    today_date_str = datetime.now().strftime("%Y-%m-%d")
+    
     try:
-        # ၂။ Timeout ပေးပြီး ဒေတာကို ဇွတ်ထည့်ခိုင်းပါမည် (INSERT OR IGNORE က ဒေတာထပ်နေလဲ Error မအော်ဘဲ ပေးဝင်စေပါသည်)
         conn = sqlite3.connect(DB_FILE, timeout=10)
         cursor = conn.cursor()
+        
+        # 🌟 စစ်ဆေးချက် - Device ID တူနေသလား အရင်စစ်သည် (ID တူရင် လုံးဝထည့်ခွင့်မပြုပါ)
+        cursor.execute("SELECT 1 FROM auth_keys WHERE target_id = ?", (target_id,))
+        existing_id = cursor.fetchone()
+        
+        if existing_id:
+            conn.close()
+            user_states[user_id] = None
+            return bot.reply_to(message, "❌ ဤ Device ID သည် Database ထဲတွင် ရှိနှင့်နေပြီးသား ဖြစ်သဖြင့် ထပ်ထည့်၍မရပါ။")
+            
+        # 🌟 ID မတူရင် Key ချင်း တူနေပါစေကာမူ INSERT အတင်းဝင်ခိုင်းမည်
         cursor.execute(
-            "INSERT OR IGNORE INTO auth_keys (target_id, key_string, unit_val, duration_type, added_by) VALUES (?, ?, ?, ?, ?)", 
-            (parts[0], parts[1], parts[2], parts[3], user_id)
+            "INSERT INTO auth_keys (target_id, key_string, unit_val, duration_type, added_by, created_at) VALUES (?, ?, ?, ?, ?, ?)", 
+            (parts[0], parts[1], parts[2], parts[3], user_id, today_date_str)
         )
         conn.commit()
         conn.close()
         
-        bot.reply_to(message, "✅ Key အချက်အလက် သိမ်းဆည်းပြီးပါပြီ။ Cloud သို့ လှမ်းပို့နေပါသည်...")
-        
-        # ၃။ Database ပိတ်ပြီးမှ GitHub Cloud ပေါ် လှမ်းတင်ခိုင်းပါသည်
+        success_msg = "✅ Key အချက်အလက် သိမ်းဆည်းပြီးပါပြီ။ Cloud သို့ လှမ်းပို့နေပါသည်..."
+        if not is_admin(user_id):
+            user_limit = get_reseller_daily_limit(user_id)
+            rem = user_limit - get_today_added_count(user_id)
+            success_msg += f"\n\n📊 **ယနေ့အခြေအနေ:** ထည့်ပြီး {get_today_added_count(user_id)} ခု / ထပ်ထည့်နိုင်သေးသည် {rem} ခု (Limit: {user_limit} ခု)"
+            
+        bot.reply_to(message, success_msg)
         sync_db_to_github()
         
     except Exception as e:
-        # ဘာ error ပဲတက်တက် အစ်ကို့ဆီ တန်းပြပေးမည့်အပိုင်း
         bot.reply_to(message, f"❌ စနစ်အတွင်း အမှားအယွင်း ဖြစ်ပွားခဲ့သည်- {str(e)}")
         
     finally:
-        # အဆင့်အားလုံးပြီးရင် State ကို အမြဲ ပုံမှန်အတိုင်း ပြန်ပြောင်းပါသည်
         user_states[user_id] = None
 
-# 6. View My Keys
+# 6. View My Keys (🌟 Fix ချက်: မိမိထည့်ထားတဲ့ Key စာရင်းသီးသန့်ကိုပဲ မှန်ကန်စွာ ဆွဲထုတ်ပြမည့်စနစ်)
 @bot.message_handler(func=lambda msg: msg.text == "🔑 My Keys" and is_reseller(msg.from_user.id))
 def cmd_mykeys(message):
     user_states[message.from_user.id] = None
@@ -460,15 +562,27 @@ def cmd_mykeys(message):
     
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
-    cursor.execute("SELECT target_id, key_string FROM auth_keys WHERE added_by = ?", (message.from_user.id,))
+    # 🌟 Added_by ကိုသုံးပြီး မိမိထည့်ခဲ့တဲ့ Key တွေကိုပဲ ပြန်ရှာခိုင်းသည်
+    cursor.execute("SELECT target_id, key_string, created_at FROM auth_keys WHERE added_by = ?", (message.from_user.id,))
     rows = cursor.fetchall()
     conn.close()
-    if not rows: return bot.reply_to(message, "📭 သင်ထည့်သွင်းထားသော Key မရှိသေးပါ။")
-    res = "🔑 **သင်ထည့်သွင်းထားသော Key များ:**\n\n"
-    for r in rows: res += f"• ID: `{r[0]}` -> Key: `{r[1]}`\n"
+    
+    if not rows: 
+        return bot.reply_to(message, "📭 သင်ထည့်သွင်းထားသော Key မရှိသေးပါ။")
+        
+    res = "🔑 **သင်ထည့်သွင်းထားသော Key များ:**\n"
+    if not is_admin(message.from_user.id):
+        user_limit = get_reseller_daily_limit(message.from_user.id)
+        res += f"📊 *ယနေ့ထည့်သွင်းပြီးစီးမှု:* `{get_today_added_count(message.from_user.id)} / {user_limit}` ခု\n\n"
+    else:
+        res += "\n"
+        
+    for r in rows: 
+        date_str = r[2] if r[2] else "-"
+        res += f"• ID: `{r[0]}` -> Key: `{r[1]}` (ရက်စွဲ: `{date_str}`)\n"
     bot.reply_to(message, res, parse_mode="Markdown")
 
-# 7. Edit Key (Device ID အား အခြေခံ၍ ကျန်ရှိသော အချက်အလက် ၃ ခုလုံး ပြင်ဆင်သည့်စနစ်)
+# 7. Edit Key
 @bot.message_handler(func=lambda msg: msg.text == "✏️ Edit Key" and is_reseller(msg.from_user.id))
 def cmd_editkey(message):
     user_states[message.from_user.id] = 'waiting_for_edit_data'
@@ -482,17 +596,16 @@ def process_edit_key(message):
     user_id = message.from_user.id
     parts = [p.strip() for p in message.text.split("|")]
     if len(parts) != 4: 
-        user_states[user_id] = None # ပုံစံမမှန်ရင် State ပိတ်ပြီး ပြန်ထွက်သည်
+        user_states[user_id] = None
         return bot.reply_to(message, "❌ ပုံစံမမှန်ပါ။ `DeviceID | Keyသစ် | Unitသစ် | Durationသစ်` အတိုင်း ပြန်လည်စစ်ဆေးပါ။")
     
-    target_device_id = parts[0]  # ရှာဖွေမည့် Device ID
-    new_key = parts[1]           # အစားထိုးမည့် Key သစ်
-    new_unit = parts[2]          # အစားထိုးမည့် Unit သစ်
-    new_duration = parts[3]      # အစားထိုးမည့် Duration သစ်
+    target_device_id = parts[0]  
+    new_key = parts[1]           
+    new_unit = parts[2]          
+    new_duration = parts[3]      
     
     pull_data_from_github()
     
-    # ဤ Device ID ကို မည်သူက ထည့်သွင်းခဲ့သလဲ အရင်ရှာဖွေစစ်ဆေးသည်
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
     cursor.execute("SELECT added_by FROM auth_keys WHERE target_id = ?", (target_device_id,))
@@ -510,7 +623,6 @@ def process_edit_key(message):
     try:
         conn = sqlite3.connect(DB_FILE)
         cursor = conn.cursor()
-        # ရှေ့ဆုံးက Device ID ကို အခြေခံပြီး ကျန်တဲ့ Key, Unit, Duration သုံးခုလုံးကို လိုက်ပြင်သည့် Logic
         cursor.execute("""
             UPDATE auth_keys 
             SET key_string=?, unit_val=?, duration_type=? 
