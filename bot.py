@@ -422,23 +422,31 @@ def process_key_data(message):
     if len(parts) != 4: 
         return bot.reply_to(message, "❌ ပုံစံမမှန်ပါ။ `ID | Key | Unit | Duration` အတိုင်း ပြန်လည်ပေးပို့ပါ။")
     
+    # 1. အရင်ဆုံး ဒေတာကို Database ထဲမှာ အပြီးအပိုင် အရင်သိမ်းပြီး Connection ကို အမြန်ပိတ်ပါမည်
+    db_saved = False
     try:
-        conn = sqlite3.connect(DB_FILE)
+        conn = sqlite3.connect(DB_FILE, timeout=20) # Timeout ၂၀ စက္ကန့်အထိ ပေးထားပြီး Lock ကို စောင့်ခိုင်းပါမည်
         cursor = conn.cursor()
         cursor.execute("INSERT INTO auth_keys (target_id, key_string, unit_val, duration_type, added_by) VALUES (?, ?, ?, ?, ?)", (parts[0], parts[1], parts[2], parts[3], user_id))
         conn.commit()
-        conn.close()
-        bot.reply_to(message, "✅ Key အချက်အလက် သိမ်းဆည်းပြီးပါပြီ။ Cloud သို့ လှမ်းပို့နေပါသည်...")
-        sync_db_to_github()
-        user_states[user_id] = None
+        conn.close() # စက်ပိတ်ခြင်းကို သေချာအောင် အရင်လုပ်ပါသည်
+        db_saved = True
     except sqlite3.IntegrityError:
-        # database ထဲမှာ ID (target_id) တူနေခဲ့ရင် ဤနေရာကနေ စာပြန်ပို့ပါလိမ့်မည် (Key တူရင်တော့ အေးဆေး သိမ်းသွားပါမည်)
         user_states[user_id] = None
-        bot.reply_to(message, "❌ ဤ Device ID သည် Database ထဲတွင် ရှိနှင့်နေပြီးသား ဖြစ်သဖြင့် ထပ်ထည့်၍မရပါ။")
+        return bot.reply_to(message, "❌ ဤ Device ID သည် Database ထဲတွင် ရှိနှင့်နေပြီးသား ဖြစ်သဖြင့် ထပ်ထည့်၍မရပါ။")
     except Exception as e:
-        # တခြား error တစ်ခုခုတက်ရင် ပြမည့်အပိုင်း
         user_states[user_id] = None
-        bot.reply_to(message, f"❌ အမှားအယွင်း ဖြစ်ပွားခဲ့သည်- {str(e)}")
+        return bot.reply_to(message, f"❌ Database Error: {str(e)}")
+
+    # 2. Database သိမ်းဆည်းတာ အောင်မြင်မှသာ Connection ပိတ်ပြီးမှ GitHub ဆီ Sync လုပ်ပါမည် (Database Locked မဖြစ်တော့ပါ)
+    if db_saved:
+        try:
+            bot.reply_to(message, "✅ Key အချက်အလက် သိမ်းဆည်းပြီးပါပြီ။ Cloud သို့ လှမ်းပို့နေပါသည်...")
+            sync_db_to_github()
+        except Exception as e:
+            bot.send_message(ADMIN_ID, f"⚠️ Database သိမ်းပြီးသော်လည်း GitHub ဆီ ပို့ရာတွင် Error တက်ပါသည်- {str(e)}")
+        finally:
+            user_states[user_id] = None
 # 6. View My Keys
 @bot.message_handler(func=lambda msg: msg.text == "🔑 My Keys" and is_reseller(msg.from_user.id))
 def cmd_mykeys(message):
