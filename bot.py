@@ -21,7 +21,7 @@ def run_web_server():
 
 # ================= [ CONFIGURATION ] =================
 BOT_TOKEN = "8843922979:AAFZLgAekpj-QMblNTTVPWdHNs4kbPPoMDA"
-ADMIN_ID = 8701781484
+ADMIN_ID = 5617375002
 DEFAULT_LIMIT = 5  # ရီဆဲလာဟောင်းများအတွက် အော်တိုသတ်မှတ်ပေးမည့် Limit
 
 GITHUB_TOKEN = os.getenv("GH_TOKEN") 
